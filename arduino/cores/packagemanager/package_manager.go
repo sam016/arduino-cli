@@ -26,10 +26,10 @@ import (
 
 	"github.com/arduino/arduino-cli/arduino/cores"
 	"github.com/arduino/arduino-cli/arduino/cores/packageindex"
-	"github.com/arduino/go-paths-helper"
+	paths "github.com/arduino/go-paths-helper"
 	properties "github.com/arduino/go-properties-orderedmap"
 	"github.com/sirupsen/logrus"
-	"go.bug.st/relaxed-semver"
+	semver "go.bug.st/relaxed-semver"
 )
 
 // PackageManager defines the superior oracle which understands all about
@@ -38,9 +38,8 @@ import (
 // The manager also keeps track of the status of the Packages (their Platform Releases, actually)
 // installed in the system.
 type PackageManager struct {
-	Log      logrus.FieldLogger
-	packages *cores.Packages
-
+	Log         logrus.FieldLogger
+	Packages    cores.Packages
 	IndexDir    *paths.Path
 	PackagesDir *paths.Path
 	DownloadDir *paths.Path
@@ -51,7 +50,7 @@ type PackageManager struct {
 func NewPackageManager(indexDir, packagesDir, downloadDir, tempDir *paths.Path) *PackageManager {
 	return &PackageManager{
 		Log:         logrus.StandardLogger(),
-		packages:    cores.NewPackages(),
+		Packages:    cores.NewPackages(),
 		IndexDir:    indexDir,
 		PackagesDir: packagesDir,
 		DownloadDir: downloadDir,
@@ -59,17 +58,10 @@ func NewPackageManager(indexDir, packagesDir, downloadDir, tempDir *paths.Path) 
 	}
 }
 
-func (pm *PackageManager) Clear() {
-	pm.packages = cores.NewPackages()
-}
-
-func (pm *PackageManager) GetPackages() *cores.Packages {
-	return pm.packages
-}
-
+// FindPlatformReleaseProvidingBoardsWithVidPid FIXMEDOC
 func (pm *PackageManager) FindPlatformReleaseProvidingBoardsWithVidPid(vid, pid string) []*cores.PlatformRelease {
 	res := []*cores.PlatformRelease{}
-	for _, targetPackage := range pm.packages.Packages {
+	for _, targetPackage := range pm.Packages {
 		for _, targetPlatform := range targetPackage.Platforms {
 			platformRelease := targetPlatform.GetLatestRelease()
 			if platformRelease == nil {
@@ -86,9 +78,10 @@ func (pm *PackageManager) FindPlatformReleaseProvidingBoardsWithVidPid(vid, pid 
 	return res
 }
 
+// FindBoardsWithVidPid FIXMEDOC
 func (pm *PackageManager) FindBoardsWithVidPid(vid, pid string) []*cores.Board {
 	res := []*cores.Board{}
-	for _, targetPackage := range pm.packages.Packages {
+	for _, targetPackage := range pm.Packages {
 		for _, targetPlatform := range targetPackage.Platforms {
 			if platform := pm.GetInstalledPlatformRelease(targetPlatform); platform != nil {
 				for _, board := range platform.Boards {
@@ -102,9 +95,10 @@ func (pm *PackageManager) FindBoardsWithVidPid(vid, pid string) []*cores.Board {
 	return res
 }
 
+// FindBoardsWithID FIXMEDOC
 func (pm *PackageManager) FindBoardsWithID(id string) []*cores.Board {
 	res := []*cores.Board{}
-	for _, targetPackage := range pm.packages.Packages {
+	for _, targetPackage := range pm.Packages {
 		for _, targetPlatform := range targetPackage.Platforms {
 			if platform := pm.GetInstalledPlatformRelease(targetPlatform); platform != nil {
 				for _, board := range platform.Boards {
@@ -147,7 +141,7 @@ func (pm *PackageManager) ResolveFQBN(fqbn *cores.FQBN) (
 	*properties.Map, *cores.PlatformRelease, error) {
 
 	// Find package
-	targetPackage := pm.packages.Packages[fqbn.Package]
+	targetPackage := pm.Packages[fqbn.Package]
 	if targetPackage == nil {
 		return nil, nil, nil, nil, nil,
 			errors.New("unknown package " + fqbn.Package)
@@ -184,7 +178,7 @@ func (pm *PackageManager) ResolveFQBN(fqbn *cores.FQBN) (
 	coreParts := strings.Split(buildProperties.Get("build.core"), ":")
 	if len(coreParts) > 1 {
 		referredPackage := coreParts[1]
-		buildPackage := pm.packages.Packages[referredPackage]
+		buildPackage := pm.Packages[referredPackage]
 		if buildPackage == nil {
 			return targetPackage, platformRelease, board, buildProperties, nil,
 				fmt.Errorf("missing package %s:%s required for build", referredPackage, platform)
@@ -210,7 +204,7 @@ func (pm *PackageManager) LoadPackageIndexFromFile(indexPath *paths.Path) (*pack
 		return nil, fmt.Errorf("loading json index file %s: %s", indexPath, err)
 	}
 
-	index.MergeIntoPackages(pm.packages)
+	index.MergeIntoPackages(pm.Packages)
 	return index, nil
 }
 
@@ -219,7 +213,7 @@ func (pm *PackageManager) LoadPackageIndexFromFile(indexPath *paths.Path) (*pack
 func (pm *PackageManager) Package(name string) *PackageActions {
 	//TODO: perhaps these 2 structure should be merged? cores.Packages vs pkgmgr??
 	var err error
-	thePackage := pm.packages.Packages[name]
+	thePackage := pm.Packages[name]
 	if thePackage == nil {
 		err = fmt.Errorf("package '%s' not found", name)
 	}
@@ -290,6 +284,7 @@ func (ta *ToolActions) IsInstalled() (bool, error) {
 	return false, nil
 }
 
+// Release FIXMEDOC
 func (ta *ToolActions) Release(version *semver.RelaxedVersion) *ToolReleaseActions {
 	if ta.forwardError != nil {
 		return &ToolReleaseActions{forwardError: ta.forwardError}
@@ -310,6 +305,7 @@ type ToolReleaseActions struct {
 	forwardError error
 }
 
+// Get FIXMEDOC
 func (tr *ToolReleaseActions) Get() (*cores.ToolRelease, error) {
 	if tr.forwardError != nil {
 		return nil, tr.forwardError
@@ -340,9 +336,10 @@ func (pm *PackageManager) GetInstalledPlatformRelease(platform *cores.Platform) 
 	return best
 }
 
+// GetAllInstalledToolsReleases FIXMEDOC
 func (pm *PackageManager) GetAllInstalledToolsReleases() []*cores.ToolRelease {
 	tools := []*cores.ToolRelease{}
-	for _, targetPackage := range pm.packages.Packages {
+	for _, targetPackage := range pm.Packages {
 		for _, tool := range targetPackage.Tools {
 			for _, release := range tool.Releases {
 				if release.IsInstalled() {
@@ -354,6 +351,37 @@ func (pm *PackageManager) GetAllInstalledToolsReleases() []*cores.ToolRelease {
 	return tools
 }
 
+// InstalledPlatformReleases returns all installed PlatformReleases. This function is
+// useful to range all PlatformReleases in for loops.
+func (pm *PackageManager) InstalledPlatformReleases() []*cores.PlatformRelease {
+	platforms := []*cores.PlatformRelease{}
+	for _, targetPackage := range pm.Packages {
+		for _, platform := range targetPackage.Platforms {
+			for _, release := range platform.GetAllInstalled() {
+				platforms = append(platforms, release)
+			}
+		}
+	}
+	return platforms
+}
+
+// InstalledBoards returns all installed Boards. This function is useful to range
+// all Boards in for loops.
+func (pm *PackageManager) InstalledBoards() []*cores.Board {
+	boards := []*cores.Board{}
+	for _, targetPackage := range pm.Packages {
+		for _, platform := range targetPackage.Platforms {
+			for _, release := range platform.GetAllInstalled() {
+				for _, board := range release.Boards {
+					boards = append(boards, board)
+				}
+			}
+		}
+	}
+	return boards
+}
+
+// FindToolsRequiredForBoard FIXMEDOC
 func (pm *PackageManager) FindToolsRequiredForBoard(board *cores.Board) ([]*cores.ToolRelease, error) {
 	pm.Log.Infof("Searching tools required for board %s", board)
 
@@ -365,7 +393,7 @@ func (pm *PackageManager) FindToolsRequiredForBoard(board *cores.Board) ([]*core
 
 	// a Platform may not specify required tools (because it's a platform that comes from a
 	// sketchbook/hardware dir without a package_index.json) then add all available tools
-	for _, targetPackage := range pm.packages.Packages {
+	for _, targetPackage := range pm.Packages {
 		for _, tool := range targetPackage.Tools {
 			rel := tool.GetLatestInstalled()
 			if rel != nil {
@@ -391,6 +419,7 @@ func (pm *PackageManager) FindToolsRequiredForBoard(board *cores.Board) ([]*core
 	return requiredTools, nil
 }
 
+// FindToolDependency FIXMEDOC
 func (pm *PackageManager) FindToolDependency(dep *cores.ToolDependency) *cores.ToolRelease {
 	toolRelease, err := pm.Package(dep.ToolPackager).Tool(dep.ToolName).Release(dep.ToolVersion).Get()
 	if err != nil {

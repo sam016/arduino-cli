@@ -18,127 +18,124 @@
 package board
 
 import (
+	"encoding/json"
 	"fmt"
-	"time"
+	"io/ioutil"
+	"net/http"
+	"sync"
 
-	"github.com/arduino/arduino-cli/arduino/cores/packagemanager"
+	"github.com/arduino/arduino-cli/cli/globals"
 	"github.com/arduino/arduino-cli/commands"
-	"github.com/arduino/arduino-cli/common/formatter"
-	"github.com/arduino/arduino-cli/common/formatter/output"
-	"github.com/arduino/board-discovery"
-	"github.com/codeclysm/cc"
-	"github.com/spf13/cobra"
+	rpc "github.com/arduino/arduino-cli/rpc/commands"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
-func initListCommand() *cobra.Command {
-	listCommand := &cobra.Command{
-		Use:     "list",
-		Short:   "List connected boards.",
-		Long:    "Detects and displays a list of connected boards to the current computer.",
-		Example: "  " + commands.AppName + " board list --timeout 10s",
-		Args:    cobra.NoArgs,
-		Run:     runListCommand,
-	}
+var (
+	// ErrNotFound is returned when the API returns 404
+	ErrNotFound = errors.New("board not found")
+	m           sync.Mutex
+)
 
-	listCommand.Flags().StringVar(&listFlags.timeout, "timeout", "5s",
-		"The timeout of the search of connected devices, try to high it if your board is not found (e.g. to 10s).")
-	return listCommand
-}
+func apiByVidPid(url string) ([]*rpc.BoardListItem, error) {
+	retVal := []*rpc.BoardListItem{}
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header = globals.HTTPClientHeader
+	req.Header.Set("Content-Type", "application/json")
 
-var listFlags struct {
-	timeout string // Expressed in a parsable duration, is the timeout for the list and attach commands.
-}
-
-// runListCommand detects and lists the connected arduino boards
-// (either via serial or network ports).
-func runListCommand(cmd *cobra.Command, args []string) {
-	pm := commands.InitPackageManager()
-
-	monitor := discovery.New(time.Millisecond)
-	monitor.Start()
-	duration, err := time.ParseDuration(listFlags.timeout)
-	if err != nil {
-		duration = time.Second * 5
-	}
-	if formatter.IsCurrentFormat("text") {
-		stoppable := cc.Run(func(stop chan struct{}) {
-			for {
-				select {
-				case <-stop:
-					fmt.Print("\r              \r")
-					return
-				default:
-					fmt.Print("\rDiscovering.  ")
-					time.Sleep(time.Millisecond * 500)
-					fmt.Print("\rDiscovering.. ")
-					time.Sleep(time.Millisecond * 500)
-					fmt.Print("\rDiscovering...")
-					time.Sleep(time.Millisecond * 500)
-				}
+	if res, err := http.DefaultClient.Do(req); err == nil {
+		if res.StatusCode >= 400 {
+			if res.StatusCode == 404 {
+				return nil, ErrNotFound
 			}
+			return nil, errors.Errorf("the server responded with status %s", res.Status)
+		}
+
+		body, _ := ioutil.ReadAll(res.Body)
+		res.Body.Close()
+
+		var dat map[string]interface{}
+		err = json.Unmarshal(body, &dat)
+		if err != nil {
+			return nil, errors.Wrap(err, "error processing response from server")
+		}
+
+		name, nameFound := dat["name"].(string)
+		fqbn, fbqnFound := dat["fqbn"].(string)
+
+		if !nameFound || !fbqnFound {
+			return nil, errors.New("wrong format in server response")
+		}
+
+		retVal = append(retVal, &rpc.BoardListItem{
+			Name: name,
+			FQBN: fqbn,
 		})
-
-		fmt.Print("\r")
-
-		time.Sleep(duration)
-		stoppable.Stop()
-		<-stoppable.Stopped
 	} else {
-		time.Sleep(duration)
+		return nil, errors.Wrap(err, "error querying Arduino Cloud Api")
 	}
 
-	formatter.Print(NewBoardList(pm, monitor))
-
-	//monitor.Stop() //If called will slow like 1sec the program to close after print, with the same result (tested).
-	// it closes ungracefully, but at the end of the command we can't have races.
+	return retVal, nil
 }
 
-// NewBoardList returns a new board list by adding discovered boards from the board list and a monitor.
-func NewBoardList(pm *packagemanager.PackageManager, monitor *discovery.Monitor) *output.AttachedBoardList {
-	if monitor == nil {
-		return nil
+// List FIXMEDOC
+func List(instanceID int32) ([]*rpc.DetectedPort, error) {
+	m.Lock()
+	defer m.Unlock()
+
+	pm := commands.GetPackageManager(instanceID)
+	if pm == nil {
+		return nil, errors.New("invalid instance")
 	}
 
-	serialDevices := monitor.Serial()
-	networkDevices := monitor.Network()
-	ret := &output.AttachedBoardList{
-		SerialBoards:  make([]output.SerialBoardListItem, 0, len(serialDevices)),
-		NetworkBoards: make([]output.NetworkBoardListItem, 0, len(networkDevices)),
+	ports, err := commands.ListBoards(pm)
+	if err != nil {
+		return nil, errors.Wrap(err, "error getting port list from serial-discovery")
 	}
 
-	for _, item := range serialDevices {
-		boards := pm.FindBoardsWithVidPid(item.VendorID, item.ProductID)
-		if len(boards) == 0 {
-			ret.SerialBoards = append(ret.SerialBoards, output.SerialBoardListItem{
-				Name:  "unknown",
-				Port:  item.Port,
-				UsbID: fmt.Sprintf("%s:%s - %s", item.VendorID[2:], item.ProductID[2:], item.SerialNumber),
+	retVal := []*rpc.DetectedPort{}
+	for _, port := range ports {
+		b := []*rpc.BoardListItem{}
+
+		// first query installed cores through the Package Manager
+		logrus.Debug("Querying installed cores for board identification...")
+		for _, board := range pm.IdentifyBoard(port.IdentificationPrefs) {
+			b = append(b, &rpc.BoardListItem{
+				Name: board.Name(),
+				FQBN: board.FQBN(),
 			})
-			continue
 		}
 
-		board := boards[0]
-		ret.SerialBoards = append(ret.SerialBoards, output.SerialBoardListItem{
-			Name:  board.Name(),
-			Fqbn:  board.FQBN(),
-			Port:  item.Port,
-			UsbID: fmt.Sprintf("%s:%s - %s", item.VendorID[2:], item.ProductID[2:], item.SerialNumber),
-		})
-	}
+		// if installed cores didn't recognize the board, try querying
+		// the builder API
+		if len(b) == 0 {
+			logrus.Debug("Querying builder API for board identification...")
+			url := fmt.Sprintf("https://builder.arduino.cc/v3/boards/byVidPid/%s/%s",
+				port.IdentificationPrefs.Get("vid"),
+				port.IdentificationPrefs.Get("pid"))
+			items, err := apiByVidPid(url)
+			if err == ErrNotFound {
+				// the board couldn't be detected, keep going with the next port
+				logrus.Debug("Board not recognized")
+				continue
+			} else if err != nil {
+				// this is bad, bail out
+				return nil, errors.Wrap(err, "error getting board info from Arduino Cloud")
+			}
 
-	for _, item := range networkDevices {
-		boards := pm.FindBoardsWithID(item.Name)
-		if len(boards) == 0 {
-			// skip it if not recognized
-			continue
+			b = items
 		}
 
-		board := boards[0]
-		ret.NetworkBoards = append(ret.NetworkBoards, output.NetworkBoardListItem{
-			Name:     board.Name(),
-			Fqbn:     board.FQBN(),
-			Location: fmt.Sprintf("%s:%d", item.Address, item.Port),
-		})
+		// boards slice can be empty at this point if neither the cores nor the
+		// API managed to recognize the connected board
+		p := &rpc.DetectedPort{
+			Address:       port.Address,
+			Protocol:      port.Protocol,
+			ProtocolLabel: port.ProtocolLabel,
+			Boards:        b,
+		}
+		retVal = append(retVal, p)
 	}
-	return ret
+
+	return retVal, nil
 }

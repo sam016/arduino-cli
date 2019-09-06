@@ -18,25 +18,35 @@
 package librariesmanager
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/arduino/arduino-cli/arduino/libraries"
 	"github.com/arduino/arduino-cli/arduino/libraries/librariesindex"
 	"github.com/arduino/arduino-cli/arduino/utils"
-	"github.com/arduino/arduino-cli/common/formatter"
-	"github.com/arduino/go-paths-helper"
+	paths "github.com/arduino/go-paths-helper"
 )
 
-// Install installs a library and returns the installed path.
-func (lm *LibrariesManager) Install(indexLibrary *librariesindex.Release) (*paths.Path, error) {
+var (
+	// ErrAlreadyInstalled is returned when a library is already installed and task
+	// cannot proceed.
+	ErrAlreadyInstalled = errors.New("library already installed")
+)
+
+// InstallPrerequisiteCheck performs prequisite checks to install a library. It returns the
+// install path, where the library should be installed and the possible library that is already
+// installed on the same folder and it's going to be replaced by the new one.
+func (lm *LibrariesManager) InstallPrerequisiteCheck(indexLibrary *librariesindex.Release) (*paths.Path, *libraries.Library, error) {
+	saneName := utils.SanitizeName(indexLibrary.Library.Name)
+
 	var replaced *libraries.Library
-	if installedLibs, have := lm.Libraries[indexLibrary.Library.Name]; have {
+	if installedLibs, have := lm.Libraries[saneName]; have {
 		for _, installedLib := range installedLibs.Alternatives {
 			if installedLib.Location != libraries.Sketchbook {
 				continue
 			}
 			if installedLib.Version.Equal(indexLibrary.Version) {
-				return installedLib.InstallDir, fmt.Errorf("%s is already installed", indexLibrary.String())
+				return installedLib.InstallDir, nil, ErrAlreadyInstalled
 			}
 			replaced = installedLib
 		}
@@ -44,16 +54,25 @@ func (lm *LibrariesManager) Install(indexLibrary *librariesindex.Release) (*path
 
 	libsDir := lm.getSketchbookLibrariesDir()
 	if libsDir == nil {
-		return nil, fmt.Errorf("sketchbook directory not set")
+		return nil, nil, fmt.Errorf("sketchbook directory not set")
 	}
 
-	libPath := libsDir.Join(utils.SanitizeName(indexLibrary.Library.Name))
+	libPath := libsDir.Join(saneName)
 	if replaced != nil && replaced.InstallDir.EquivalentTo(libPath) {
-		formatter.Print(fmt.Sprintf("Replacing %s with %s", replaced, indexLibrary))
+
 	} else if libPath.IsDir() {
-		return nil, fmt.Errorf("destination dir %s already exists, cannot install", libPath)
+		return nil, nil, fmt.Errorf("destination dir %s already exists, cannot install", libPath)
 	}
-	return libPath, indexLibrary.Resource.Install(lm.DownloadsDir, libsDir, libPath)
+	return libPath, replaced, nil
+}
+
+// Install installs a library on the specified path.
+func (lm *LibrariesManager) Install(indexLibrary *librariesindex.Release, libPath *paths.Path) error {
+	libsDir := lm.getSketchbookLibrariesDir()
+	if libsDir == nil {
+		return fmt.Errorf("sketchbook directory not set")
+	}
+	return indexLibrary.Resource.Install(lm.DownloadsDir, libsDir, libPath)
 }
 
 // Uninstall removes a Library

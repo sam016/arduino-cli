@@ -21,13 +21,18 @@ import (
 	"fmt"
 
 	"github.com/arduino/arduino-cli/arduino/cores"
-	"github.com/arduino/go-paths-helper"
+	paths "github.com/arduino/go-paths-helper"
 	properties "github.com/arduino/go-properties-orderedmap"
 	semver "go.bug.st/relaxed-semver"
 )
 
+// MandatoryProperties FIXMEDOC
 var MandatoryProperties = []string{"name", "version", "author", "maintainer"}
+
+// OptionalProperties FIXMEDOC
 var OptionalProperties = []string{"sentence", "paragraph", "url"}
+
+// ValidCategories FIXMEDOC
 var ValidCategories = map[string]bool{
 	"Display":             true,
 	"Communication":       true,

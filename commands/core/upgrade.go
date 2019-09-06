@@ -18,100 +18,79 @@
 package core
 
 import (
-	"os"
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
 
 	"github.com/arduino/arduino-cli/arduino/cores/packagemanager"
-
 	"github.com/arduino/arduino-cli/commands"
-	"github.com/arduino/arduino-cli/common/formatter"
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
+	rpc "github.com/arduino/arduino-cli/rpc/commands"
 )
 
-func initUpgradeCommand() *cobra.Command {
-	upgradeCommand := &cobra.Command{
-		Use:   "upgrade [PACKAGER:ARCH] ...",
-		Short: "Upgrades one or all installed platforms to the latest version.",
-		Long:  "Upgrades one or all installed platforms to the latest version.",
-		Example: "" +
-			"  # upgrade everything to the latest version\n" +
-			"  " + commands.AppName + " core upgrade\n\n" +
-			"  # upgrade arduino:samd to the latest version\n" +
-			"  " + commands.AppName + " core upgrade arduino:samd",
-		Run: runUpgradeCommand,
+var (
+	// ErrAlreadyLatest is returned when an upgrade is not possible because
+	// already at latest version.
+	ErrAlreadyLatest = errors.New("platform already at latest version")
+)
+
+// PlatformUpgrade FIXMEDOC
+func PlatformUpgrade(ctx context.Context, req *rpc.PlatformUpgradeReq,
+	downloadCB commands.DownloadProgressCB, taskCB commands.TaskProgressCB, downloaderHeaders http.Header) (*rpc.PlatformUpgradeResp, error) {
+
+	pm := commands.GetPackageManager(req.GetInstance().GetId())
+	if pm == nil {
+		return nil, errors.New("invalid instance")
 	}
-	return upgradeCommand
-}
 
-func runUpgradeCommand(cmd *cobra.Command, args []string) {
-	logrus.Info("Executing `arduino core upgrade`")
-
-	pm := commands.InitPackageManagerWithoutBundles()
-
-	platformsRefs := parsePlatformReferenceArgs(args)
-	if len(platformsRefs) == 0 {
-		upgradeAllPlatforms(pm)
-	} else {
-		upgrade(pm, platformsRefs)
-	}
-}
-
-func upgradeAllPlatforms(pm *packagemanager.PackageManager) {
 	// Extract all PlatformReference to platforms that have updates
-	platformRefs := []*packagemanager.PlatformReference{}
-
-	for _, targetPackage := range pm.GetPackages().Packages {
-		for _, platform := range targetPackage.Platforms {
-			installed := pm.GetInstalledPlatformRelease(platform)
-			if installed == nil {
-				continue
-			}
-			latest := platform.GetLatestRelease()
-			if !latest.Version.GreaterThan(installed.Version) {
-				continue
-			}
-			platformRefs = append(platformRefs, &packagemanager.PlatformReference{
-				Package:              targetPackage.Name,
-				PlatformArchitecture: platform.Architecture,
-			})
-		}
+	ref := &packagemanager.PlatformReference{
+		Package:              req.PlatformPackage,
+		PlatformArchitecture: req.Architecture,
+	}
+	if err := upgradePlatform(pm, ref, downloadCB, taskCB, downloaderHeaders); err != nil {
+		return nil, err
 	}
 
-	upgrade(pm, platformRefs)
+	if _, err := commands.Rescan(req.GetInstance().GetId()); err != nil {
+		return nil, err
+	}
+
+	return &rpc.PlatformUpgradeResp{}, nil
 }
 
-func upgrade(pm *packagemanager.PackageManager, platformsRefs []*packagemanager.PlatformReference) {
-	for _, platformRef := range platformsRefs {
-		if platformRef.PlatformVersion != nil {
-			formatter.PrintErrorMessage("Invalid item " + platformRef.String() + ", upgrade doesn't accept parameters with version")
-			os.Exit(commands.ErrBadArgument)
-		}
+func upgradePlatform(pm *packagemanager.PackageManager, platformRef *packagemanager.PlatformReference,
+	downloadCB commands.DownloadProgressCB, taskCB commands.TaskProgressCB, downloaderHeaders http.Header) error {
+	if platformRef.PlatformVersion != nil {
+		return fmt.Errorf("upgrade doesn't accept parameters with version")
 	}
 
 	// Search the latest version for all specified platforms
 	toInstallRefs := []*packagemanager.PlatformReference{}
-	for _, platformRef := range platformsRefs {
-		platform := pm.FindPlatform(platformRef)
-		if platform == nil {
-			formatter.PrintErrorMessage("Platform " + platformRef.String() + " not found")
-			os.Exit(commands.ErrBadArgument)
-		}
-		installed := pm.GetInstalledPlatformRelease(platform)
-		if installed == nil {
-			formatter.PrintErrorMessage("Platform " + platformRef.String() + " is not installed")
-			os.Exit(commands.ErrBadArgument)
-		}
-		latest := platform.GetLatestRelease()
-		if !latest.Version.GreaterThan(installed.Version) {
-			formatter.PrintResult("Platform " + platformRef.String() + " is already at the latest version.")
-		} else {
-			platformRef.PlatformVersion = latest.Version
-			toInstallRefs = append(toInstallRefs, platformRef)
-		}
+	platform := pm.FindPlatform(platformRef)
+	if platform == nil {
+		return fmt.Errorf("platform %s not found", platformRef)
 	}
+	installed := pm.GetInstalledPlatformRelease(platform)
+	if installed == nil {
+		return fmt.Errorf("platform %s is not installed", platformRef)
+	}
+	latest := platform.GetLatestRelease()
+	if !latest.Version.GreaterThan(installed.Version) {
+		return ErrAlreadyLatest
+	}
+	platformRef.PlatformVersion = latest.Version
+	toInstallRefs = append(toInstallRefs, platformRef)
 
 	for _, platformRef := range toInstallRefs {
-		downloadPlatformByRef(pm, platformRef)
-		installPlatformByRef(pm, platformRef)
+		platform, tools, err := pm.FindPlatformReleaseDependencies(platformRef)
+		if err != nil {
+			return fmt.Errorf("platform %s is not installed", platformRef)
+		}
+		err = installPlatform(pm, platform, tools, downloadCB, taskCB, downloaderHeaders)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }

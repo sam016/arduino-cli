@@ -18,36 +18,26 @@
 package board
 
 import (
-	"sort"
+	"context"
+	"errors"
 	"strings"
 
 	"github.com/arduino/arduino-cli/commands"
-	"github.com/arduino/arduino-cli/common/formatter"
-	"github.com/arduino/arduino-cli/common/formatter/output"
-	"github.com/spf13/cobra"
+	rpc "github.com/arduino/arduino-cli/rpc/commands"
 )
 
-func initListAllCommand() *cobra.Command {
-	listAllCommand := &cobra.Command{
-		Use:   "listall [boardname]",
-		Short: "List all known boards and their corresponding FQBN.",
-		Long: "" +
-			"List all boards that have the support platform installed. You can search\n" +
-			"for a specific board if you specify the board name",
-		Example: "" +
-			"  " + commands.AppName + " board listall\n" +
-			"  " + commands.AppName + " board listall zero",
-		Args: cobra.ArbitraryArgs,
-		Run:  runListAllCommand,
+// ListAll FIXMEDOC
+func ListAll(ctx context.Context, req *rpc.BoardListAllReq) (*rpc.BoardListAllResp, error) {
+	pm := commands.GetPackageManager(req.GetInstance().GetId())
+	if pm == nil {
+		return nil, errors.New("invalid instance")
 	}
-	return listAllCommand
-}
 
-// runListAllCommand list all installed boards
-func runListAllCommand(cmd *cobra.Command, args []string) {
-	pm := commands.InitPackageManager()
-
+	args := req.GetSearchArgs()
 	match := func(name string) bool {
+		if len(args) == 0 {
+			return true
+		}
 		name = strings.ToLower(name)
 		for _, term := range args {
 			if !strings.Contains(name, strings.ToLower(term)) {
@@ -57,8 +47,8 @@ func runListAllCommand(cmd *cobra.Command, args []string) {
 		return true
 	}
 
-	list := &output.BoardList{}
-	for _, targetPackage := range pm.GetPackages().Packages {
+	list := &rpc.BoardListAllResp{Boards: []*rpc.BoardListItem{}}
+	for _, targetPackage := range pm.Packages {
 		for _, platform := range targetPackage.Platforms {
 			platformRelease := pm.GetInstalledPlatformRelease(platform)
 			if platformRelease == nil {
@@ -68,13 +58,13 @@ func runListAllCommand(cmd *cobra.Command, args []string) {
 				if !match(board.Name()) {
 					continue
 				}
-				list.Boards = append(list.Boards, &output.BoardListItem{
+				list.Boards = append(list.Boards, &rpc.BoardListItem{
 					Name: board.Name(),
-					Fqbn: board.FQBN(),
+					FQBN: board.FQBN(),
 				})
 			}
 		}
 	}
-	sort.Sort(list)
-	formatter.Print(list)
+
+	return list, nil
 }

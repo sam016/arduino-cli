@@ -18,35 +18,24 @@
 package core
 
 import (
+	"context"
+	"errors"
 	"regexp"
 	"strings"
 
-	"github.com/arduino/arduino-cli/common/formatter/output"
-
 	"github.com/arduino/arduino-cli/arduino/cores"
 	"github.com/arduino/arduino-cli/commands"
-	"github.com/arduino/arduino-cli/common/formatter"
-	"github.com/spf13/cobra"
+	rpc "github.com/arduino/arduino-cli/rpc/commands"
 )
 
-func initSearchCommand() *cobra.Command {
-	searchCommand := &cobra.Command{
-		Use:     "search <keywords...>",
-		Short:   "Search for a core in the package index.",
-		Long:    "Search for a core in the package index using the specified keywords.",
-		Example: "  " + commands.AppName + " core search MKRZero -v",
-		Args:    cobra.MinimumNArgs(1),
-		Run:     runSearchCommand,
+// PlatformSearch FIXMEDOC
+func PlatformSearch(ctx context.Context, req *rpc.PlatformSearchReq) (*rpc.PlatformSearchResp, error) {
+	pm := commands.GetPackageManager(req.GetInstance().GetId())
+	if pm == nil {
+		return nil, errors.New("invalid instance")
 	}
-	return searchCommand
-}
 
-func runSearchCommand(cmd *cobra.Command, args []string) {
-	pm := commands.InitPackageManagerWithoutBundles()
-
-	search := strings.ToLower(strings.Join(args, " "))
-	formatter.Print("Searching for platforms matching '" + search + "'")
-	formatter.Print("")
+	search := req.SearchArgs
 
 	res := []*cores.PlatformRelease{}
 	if isUsb, _ := regexp.MatchString("[0-9a-f]{4}:[0-9a-f]{4}", search); isUsb {
@@ -56,7 +45,7 @@ func runSearchCommand(cmd *cobra.Command, args []string) {
 		match := func(line string) bool {
 			return strings.Contains(strings.ToLower(line), search)
 		}
-		for _, targetPackage := range pm.GetPackages().Packages {
+		for _, targetPackage := range pm.Packages {
 			for _, platform := range targetPackage.Platforms {
 				platformRelease := platform.GetLatestRelease()
 				if platformRelease == nil {
@@ -76,17 +65,9 @@ func runSearchCommand(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	if len(res) == 0 {
-		formatter.Print("No platforms matching your search")
-	} else {
-		out := []*output.SearchedPlatform{}
-		for _, platformRelease := range res {
-			out = append(out, &output.SearchedPlatform{
-				ID:      platformRelease.Platform.String(),
-				Name:    platformRelease.Platform.Name,
-				Version: platformRelease.Version,
-			})
-		}
-		formatter.Print(output.SearchedPlatforms{Platforms: out})
+	out := make([]*rpc.Platform, len(res))
+	for i, platformRelease := range res {
+		out[i] = PlatformReleaseToRPC(platformRelease)
 	}
+	return &rpc.PlatformSearchResp{SearchOutput: out}, nil
 }

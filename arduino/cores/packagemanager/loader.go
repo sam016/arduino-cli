@@ -27,7 +27,7 @@ import (
 	"github.com/arduino/arduino-cli/configs"
 	"github.com/arduino/go-paths-helper"
 	properties "github.com/arduino/go-properties-orderedmap"
-	"go.bug.st/relaxed-semver"
+	semver "go.bug.st/relaxed-semver"
 )
 
 // LoadHardware read all plaforms from the configured paths
@@ -112,7 +112,7 @@ func (pm *PackageManager) LoadHardwareFromDirectory(path *paths.Path) error {
 			continue
 		}
 
-		targetPackage := pm.packages.GetOrCreatePackage(packager)
+		targetPackage := pm.Packages.GetOrCreatePackage(packager)
 		if err := pm.loadPlatforms(targetPackage, architectureParentPath); err != nil {
 			return fmt.Errorf("loading package %s: %s", packager, err)
 		}
@@ -361,6 +361,7 @@ func (pm *PackageManager) loadToolReleasesFromTool(tool *cores.Tool, toolPath *p
 	return nil
 }
 
+// LoadToolsFromBundleDirectories FIXMEDOC
 func (pm *PackageManager) LoadToolsFromBundleDirectories(dirs paths.PathList) error {
 	for _, dir := range dirs {
 		if err := pm.LoadToolsFromBundleDirectory(dir); err != nil {
@@ -370,6 +371,7 @@ func (pm *PackageManager) LoadToolsFromBundleDirectories(dirs paths.PathList) er
 	return nil
 }
 
+// LoadToolsFromBundleDirectory FIXMEDOC
 func (pm *PackageManager) LoadToolsFromBundleDirectory(toolsPath *paths.Path) error {
 	pm.Log.Infof("Loading tools from bundle dir: %s", toolsPath)
 
@@ -417,7 +419,7 @@ func (pm *PackageManager) LoadToolsFromBundleDirectory(toolsPath *paths.Path) er
 		}
 
 		for packager, toolsData := range all.FirstLevelOf() {
-			targetPackage := pm.packages.GetOrCreatePackage(packager)
+			targetPackage := pm.Packages.GetOrCreatePackage(packager)
 
 			for toolName, toolVersion := range toolsData.AsMap() {
 				tool := targetPackage.GetOrCreateTool(toolName)
@@ -429,7 +431,7 @@ func (pm *PackageManager) LoadToolsFromBundleDirectory(toolsPath *paths.Path) er
 		}
 	} else {
 		// otherwise load the tools inside the unnamed package
-		unnamedPackage := pm.packages.GetOrCreatePackage("")
+		unnamedPackage := pm.Packages.GetOrCreatePackage("")
 		pm.loadToolsFromPackage(unnamedPackage, toolsPath)
 	}
 	return nil
